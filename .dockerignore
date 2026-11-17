@@ -6,3 +6,9 @@ archive/
 dist/
 docs/
 *.md
+.env
+.obsidian/
+.claude/
+.vscode/
+.idea/
+*.pyc
