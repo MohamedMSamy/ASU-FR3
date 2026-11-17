@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# fr3 -- one entry point for the ASU-FR3 stack (a thin wrapper around docker compose).
+#   ./fr3 up <mujoco|isaac|real> [--rviz]    start the stack in this terminal (Ctrl+C stops it); `real` prints the safety checklist and asks for 'go'
+#   ./fr3 up isaac --standin                  isaac mode plus a MuJoCo stand-in for Isaac Sim (second container)
+#   ./fr3 down [mode]                         stop and remove it
+#   ./fr3 logs [mode]                         follow its log
+#   ./fr3 shell [mode]                        shell inside the running container (ROS and DDS ready)
+#   ./fr3 run [mode] <script|number> [args]   run a script from scripts/ (or tools/) inside the running container: ./fr3 run sim 08 (08_home.py), ./fr3 run sim 08.1, ./fr3 run 01 --help ('sim' = mujoco)
+#   ./fr3 run fake <script.py> [args]         rehearsal: the script against a fake robot, no stack, no ROS (CRISP_LAB_FAKE=1)
+#   ./fr3 monitor [mode] [--once]             live dashboard in a second terminal: torques, forces, errors, who publishes the targets
+#   ./fr3 vr [mode] [--pos S --rot S ...]     Quest 2 teleop: ROS-TCP endpoint + vr_* tools inside the running stack
+#   ./fr3 scale [mode] --pos S --rot S        change the VR scales while ./fr3 vr runs
+#   ./fr3 setk [mode] <k_pos> <k_rot>         set the Cartesian stiffness live (no restart)
+#   ./fr3 rec [mode] NAME SECONDS             record the 1 kHz controller introspection stream to data/logs
+#   ./fr3 cmp NAME [--tag T] [--steps]        compare the latest sim and real log of a test (offline, no stack needed)
+#   ./fr3 cmp-all                             the same for the whole standard test set
+#   ./fr3 bundle                              pack the image + compose.yaml + fr3 into dist/ to copy to another machine (INSTALL.md inside = docs/GUIDE.md)
+#   ./fr3 build                               build the image from the Dockerfile in this folder (the first time: about an hour)
+#   ./fr3 urdf [--keep-ros2-control]          export a plain URDF + meshes to ./data/urdf (for Isaac Sim, MoveIt, ...)
+#   ./fr3 ctl [mode] [verb ...]               ros2 control inside the container (default: list_controllers)
+#   ./fr3 gripper [mode] [open|close|toggle|move W|status] [options]   Franka Hand; no argument = toggle; real stack only (./fr3 gripper --help)
+#   ./fr3 ros2 [mode] <args>                  ANY ros2 command inside the container, e.g. ./fr3 ros2 topic info /target_pose -v
+#   ./fr3 exec [mode] <command ...>           ANY command inside the container (python3, bash -c '...', ls, ...), ROS and DDS ready
+set -euo pipefail
+# FR3_PROJECT=other ROS_DOMAIN_ID=88 ./fr3 up mujoco  runs a second, independent stack (own compose project, own ROS domain)
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+die() { echo "fr3: $*" >&2; exit 1; }
+check_mode() {
+  case "${1:-}" in
+    mujoco|isaac|real) ;;
+    *) die "mode must be mujoco, isaac or real (got '${1:-}')";;
+  esac
+}
+domain_for() { case "$1" in real) echo 101;; *) echo 100;; esac; }
+# Cyclone discovery file: isaac mode talks to Isaac Sim on the same machine over lo with unicast discovery (config/cyclone_isaac.xml)
+cyclone_for() { case "$1" in isaac) echo cyclone_isaac.xml;; *) echo cyclone_config.xml;; esac; }
+# Controller gains file: the real arm uses controllers_real.yaml (enable_overrun false: libfranka paces the loop, libfranka compensates gravity);
+# isaac uses controllers_gravity.yaml (mujoco: the plant compensates, controllers.yaml): gravity is ON (in the calibrated MuJoCo scene, and in Isaac Sim) and nothing else compensates it, so the CRISP
+# controllers do (use_gravity_compensation: true). If a simulator's gravity is switched off, use CONTROLLERS_FILE=controllers.yaml (compensating a gravity that is off
+# makes the arm rise). Same table: asu_fr3_bringup/description.py.
+controllers_for() { case "$1" in real) echo controllers_real.yaml;; mujoco) echo controllers.yaml;; *) echo controllers_gravity.yaml;; esac; }
+# MuJoCo scene: the calibrated model with gravity on (also for the isaac stand-in). The OLD variants are in archive/models_old_variants/ (copy them back into models/ to use them).
+scene_for() { case "$1" in mujoco) echo scene_fric_gravcomp_v1.xml;; *) echo scene_fric_gravity_v1.xml;; esac; }
+dc() { local mode="$1"; shift; MODE="$mode" ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-$(domain_for "$mode")}" CYCLONE_CONFIG="${CYCLONE_CONFIG:-$(cyclone_for "$mode")}" CONTROLLERS_FILE="${CONTROLLERS_FILE:-$(controllers_for "$mode")}" FR3_SCENE="${FR3_SCENE:-$(scene_for "$mode")}" \
+         docker compose -p "${FR3_PROJECT:-asu-fr3}-$mode" "$@"; }
+tty_flag() { [ -t 0 ] || echo "-T"; }
+# for ros2/exec: a terminal only when both input and output are one (so `./fr3 ros2 topic echo X | head` stays clean)
+tty_flag_io() { { [ -t 0 ] && [ -t 1 ]; } || echo "-T"; }
+# the lab environment inside the container: scripts, tools and config of the repo (mounted at /ws_override) win over the baked ones
+LAB_PYTHONPATH=/ws_override/scripts:/opt/asu_fr3/scripts:/ws_override/config:/opt/asu_fr3/config:/ws_override/tools:/opt/asu_fr3/tools
+lab_mode() { [ "$1" = real ] && echo real || echo sim; }
+# find <name> in the given folders (first hit wins) and run it with the remaining arguments, e.g. for bin/ and tools/
+FIND_AND_RUN='n="$1"; shift; for d in $DIRS; do [ -f "$d/$n" ] && exec "$d/$n" "$@"; done; echo "no such file: $n in $DIRS"; exit 1'
+# bin_run <mode> <script> [args]: a script from bin/ inside the running stack of <mode>
+bin_run() { local mode="$1"; shift
+  dc "$mode" exec $(tty_flag) -e CRISP_LAB_MODE="$(lab_mode "$mode")" -e PYTHONPATH="$LAB_PYTHONPATH" -e DIRS="/ws_override/bin /opt/asu_fr3/bin" \
+     -e VR_IP="${VR_IP:-}" -e POS="${POS:-}" -e ROT="${ROT:-}" -e VR_TELEOP="${VR_TELEOP:-}" -e GRIPPER="${GRIPPER:-}" \
+     stack /usr/local/bin/asu-fr3-entrypoint bash -c "$FIND_AND_RUN" _ "$@"; }
+# the verbs below take an optional mode first (default mujoco)
+mode_arg() { MODE_ARG=mujoco; case "${1:-}" in mujoco|isaac|real) MODE_ARG="$1"; MODE_SHIFT=1;; *) MODE_SHIFT=0;; esac; }
+
+# The folders compose mounts must exist and belong to you: if they are missing Docker creates them as root.
+# ~/.Xauthority is mounted for RViz; Docker would create a directory of that name if the file does not exist.
+prepare_host() { mkdir -p config models scripts tools bin examples data/logs; [ -e "$HOME/.Xauthority" ] || touch "$HOME/.Xauthority"; }
+
+# `./fr3 up real`: nothing else may hold the arm, then the checklist (bin/real_checklist.py: the safety box, lab_config.py and controller file in use, gains, IP, domain), then you type go.
+real_gate() {
+  local busy ip="${ROBOT_IP:-172.16.0.2}" cf="${CONTROLLERS_FILE:-controllers_real.yaml}" dom="${ROS_DOMAIN_ID:-101}"
+  busy=$(docker ps --format '{{.Names}}' | grep -E '^(asu-fr3-real|crisp-real)' || true)
+  [ -z "$busy" ] || die "a real stack is already running ($busy): stop it first (./fr3 down real, or bin/down.sh real in crisp_lab)"
+  echo; echo "=================  REAL ROBOT  ================="
+  if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then echo "  robot $ip: answers ping"; else echo "  robot $ip: NO ANSWER to ping (cable, address, robot off?)"; fi
+  docker compose -p asu-fr3-tools run --rm --no-deps -T -e CONTROLLERS_FILE="$cf" -e ROBOT_IP="$ip" -e ROS_DOMAIN_ID="$dom" stack \
+    bash -c 'for d in /ws_override/bin /opt/asu_fr3/bin; do [ -f "$d/real_checklist.py" ] && exec python3 "$d/real_checklist.py"; done; echo "real_checklist.py not found"; exit 1' \
+    < /dev/null || die "could not print the checklist; not starting"   # </dev/null: the one-off container must not eat the answer typed below
+  read -r -p "Type 'go' to start the stack against the REAL robot: " ans || ans=""
+  [ "$ans" = go ] || die "aborted (nothing was started)"
+}
+# a one-line reminder of the gains before any script runs on the real arm
+real_banner() {
+  local kp kr
+  kp=$(dc real exec -T stack /usr/local/bin/asu-fr3-entrypoint ros2 param get /cartesian_impedance_controller task.k_pos_x 2>/dev/null | awk '{print $NF}') || kp=""
+  kr=$(dc real exec -T stack /usr/local/bin/asu-fr3-entrypoint ros2 param get /cartesian_impedance_controller task.k_rot_x 2>/dev/null | awk '{print $NF}') || kr=""
+  echo "[fr3] REAL arm. Gains now: k_pos ${kp:-?}  k_rot ${kr:-?}   (change with ./fr3 setk real KPOS KROT)"
+}
+
+# resolve_script <name|number>: "08" -> 08_home.py, "8" -> 08_home.py, "08.1" -> 08.1_home.py, "01" -> 01_hold_test.py; anything else gets .py added
+resolve_script() { local n="$1" f
+  if [[ "$n" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    local whole="${n%%.*}" frac=""; [[ "$n" == *.* ]] && frac=".${n#*.}"
+    n=$(printf '%02d' "$((10#$whole))")$frac
+    for f in scripts/"$n"_*.py; do [ -e "$f" ] && { basename "$f"; return; }; done
+    die "no script numbered $n in scripts/ (the numbered ones: $(cd scripts && ls [0-9]*.py | tr '\n' ' '))"
+  fi
+  [[ "$n" == *.py ]] && echo "$n" || echo "$n.py"; }
+
+# "sim" (the old bin/run.sh name) means mujoco, wherever a mode is expected
+args=(); for a in "$@"; do [ "$a" = sim ] && a=mujoco; args+=("$a"); done; set -- "${args[@]+"${args[@]}"}"
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+case "$cmd" in ""|-h|--help|help|build|bundle) ;; *) prepare_host;; esac
+case "$cmd" in
+  bundle)
+    img="${ASU_FR3_IMAGE:-asu-fr3:0.1.0-dev}"; tag="${img##*:}"; out="dist/asu-fr3-bundle"
+    mkdir -p "$out/config"; cp compose.yaml fr3 "$out/"; cp config/cyclone_isaac.xml "$out/config/"
+    cp docs/GUIDE.md "$out/INSTALL.md" 2>/dev/null || true
+    echo "[fr3] saving $img (this takes a few minutes) ..."
+    docker save "$img" | gzip -3 > "$out/asu-fr3_$tag.tar.gz"
+    ( cd "$out" && sha256sum "asu-fr3_$tag.tar.gz" > SHA256SUM )
+    echo "[fr3] bundle: $out  ($(du -sh "$out" | cut -f1))"; ls -la "$out"
+    echo "[fr3] copy it:  scp -r $out <user>@<instance>:~/   then follow INSTALL.md";;
+  build) docker build --target final -t "${ASU_FR3_IMAGE:-asu-fr3:0.1.0-dev}" .;;
+  up)
+    mode="${1:-}"; check_mode "$mode"; shift
+    rviz=false; standin=false
+    for a in "$@"; do case "$a" in --rviz) rviz=true;; --standin) standin=true;; *) die "unknown option '$a'";; esac; done
+    [ "$standin" = true ] && [ "$mode" != isaac ] && die "--standin only makes sense with isaac mode"
+    [ "$mode" = real ] && real_gate
+    # a gains file made for the REAL arm in a simulated stack: enable_overrun false makes the controller loop free-run (about 5 kHz, 2 to 3 cores)
+    if [ "$mode" != real ] && grep -q "enable_overrun: *false" "config/${CONTROLLERS_FILE:-$(controllers_for "$mode")}" 2>/dev/null; then
+      echo "[fr3] WARNING: ${CONTROLLERS_FILE:-$(controllers_for "$mode")} has enable_overrun: false. That is the file for the REAL arm: in the $mode stack the controller loop would free-run at about 5 kHz (2 to 3 CPU cores)." >&2
+      echo "[fr3]          Is CONTROLLERS_FILE exported in this terminal?  echo \"\$CONTROLLERS_FILE\" ;  unset CONTROLLERS_FILE   (Ctrl+C now to stop)" >&2
+    fi
+    [ "$rviz" = true ] && { xhost +local: >/dev/null 2>&1 || echo "fr3: xhost not available; RViz may not open"; }
+    export RVIZ="$rviz"
+    echo "[fr3] mode=$mode  ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-$(domain_for "$mode")}  rviz=$rviz  standin=$standin"
+    if [ "$standin" = true ]; then COMPOSE_PROFILES=standin dc "$mode" up stack standin; else dc "$mode" up stack; fi
+    ;;
+  down)  mode="${1:-mujoco}"; check_mode "$mode"; COMPOSE_PROFILES=standin dc "$mode" down;;
+  logs)  mode="${1:-mujoco}"; check_mode "$mode"; dc "$mode" logs -f stack;;
+  shell) mode="${1:-mujoco}"; check_mode "$mode"; dc "$mode" exec $(tty_flag) stack /usr/local/bin/asu-fr3-entrypoint bash;;
+  run)
+    if [ "${1:-}" = fake ]; then   # rehearsal: one-off container, no stack, no ROS traffic
+      shift; script="${1:?usage: ./fr3 run fake <script.py|number> [args]}"; shift; script="$(resolve_script "$script")"
+      docker compose -p asu-fr3-tools run --rm --no-deps $(tty_flag) -e CRISP_LAB_FAKE=1 -e CRISP_LAB_MODE=sim -e PYTHONPATH="$LAB_PYTHONPATH" \
+        -e DIRS="/ws_override/scripts /opt/asu_fr3/scripts /ws_override/tools /opt/asu_fr3/tools" stack \
+        bash -c 'n="$1"; shift; for d in $DIRS; do [ -f "$d/$n" ] && exec python3 "$d/$n" "$@"; done; echo "no such script: $n"; echo "scripts and tools you can run (repo copy first, then baked):"; ls /ws_override/scripts /opt/asu_fr3/scripts /ws_override/tools /opt/asu_fr3/tools 2>/dev/null | grep -E "[.]py$" | sort -u | grep -v "^lab_" | sed "s/^/  /"; exit 1' _ "$script" "$@"
+      exit $?
+    fi
+    mode=mujoco
+    case "${1:-}" in mujoco|isaac|real) mode="$1"; shift;; esac
+    script="${1:?usage: ./fr3 run [mode] <script.py|number> [args]}"; shift
+    script="$(resolve_script "$script")"
+    [ "$mode" = real ] && real_banner
+    # scripts/ and config/ in the repo (mounted at /ws_override) win over the baked copies; tools/ (vr_*.py ...) are found too
+    dc "$mode" exec $(tty_flag) -e CRISP_LAB_MODE="$(lab_mode "$mode")" -e PYTHONPATH="$LAB_PYTHONPATH" \
+       stack /usr/local/bin/asu-fr3-entrypoint bash -c \
+       'for d in /ws_override/scripts /opt/asu_fr3/scripts /ws_override/tools /opt/asu_fr3/tools; do [ -f "$d/$0" ] && exec python3 "$d/$0" "$@"; done
+        echo "no such script: $0"; echo "scripts and tools you can run (repo copy first, then baked):"; ls /ws_override/scripts /opt/asu_fr3/scripts /ws_override/tools /opt/asu_fr3/tools 2>/dev/null | grep -E "[.]py$" | sort -u | grep -v "^lab_" | sed "s/^/  /"; exit 1' "$script" "$@"
+    ;;
+  ros2)  mode_arg "$@"; shift "$MODE_SHIFT"
+         [ $# -gt 0 ] || die "usage: ./fr3 ros2 [mode] <ros2 arguments>   e.g. ./fr3 ros2 topic info /target_pose -v"
+         dc "$MODE_ARG" exec $(tty_flag_io) stack /usr/local/bin/asu-fr3-entrypoint ros2 "$@";;
+  exec)  mode_arg "$@"; shift "$MODE_SHIFT"
+         [ $# -gt 0 ] || die "usage: ./fr3 exec [mode] <command ...>   e.g. ./fr3 exec real bash -c 'ros2 node list'"
+         dc "$MODE_ARG" exec $(tty_flag_io) -e CRISP_LAB_MODE="$(lab_mode "$MODE_ARG")" -e PYTHONPATH="$LAB_PYTHONPATH" stack /usr/local/bin/asu-fr3-entrypoint "$@";;
+  gripper)
+    mode=real; case "${1:-}" in mujoco|isaac|real) mode="$1"; shift;; esac
+    dc "$mode" exec $(tty_flag) -e CRISP_LAB_MODE="$(lab_mode "$mode")" -e PYTHONPATH="$LAB_PYTHONPATH" \
+       stack /usr/local/bin/asu-fr3-entrypoint bash -c \
+       'for d in /ws_override/scripts /opt/asu_fr3/scripts; do [ -f "$d/16_gripper.py" ] && exec python3 "$d/16_gripper.py" "$@"; done; echo "16_gripper.py not found"; exit 1' _ "$@"
+    ;;
+  monitor) mode_arg "$@"; shift "$MODE_SHIFT"; exec "$0" run "$MODE_ARG" monitor.py "$@";;
+  vr)    mode_arg "$@"; shift "$MODE_SHIFT"; bin_run "$MODE_ARG" vr_up.sh "$@";;
+  scale) mode_arg "$@"; shift "$MODE_SHIFT"
+         dc "$MODE_ARG" exec $(tty_flag) stack /usr/local/bin/asu-fr3-entrypoint python3 /opt/asu_fr3/tools/vr_scale.py "$@";;
+  setk)  mode_arg "$@"; shift "$MODE_SHIFT"
+         [ $# -eq 2 ] || die "usage: ./fr3 setk [mode] <k_pos> <k_rot>"
+         dc "$MODE_ARG" exec $(tty_flag) stack /usr/local/bin/asu-fr3-entrypoint bash -c 'for d in /ws_override/bin /opt/asu_fr3/bin; do [ -f "$d/setk.sh" ] && source "$d/setk.sh" && break; done; setk "$@"' _ "$@";;
+  rec)   mode_arg "$@"; shift "$MODE_SHIFT"; bin_run "$MODE_ARG" rec.sh "$@";;
+  cmp|cmp-all)   # offline: one-off container, no stack needed (reads and writes ./data/logs)
+    docker compose -p asu-fr3-tools run --rm --no-deps $(tty_flag) -e PYTHONPATH="$LAB_PYTHONPATH" -e DIRS="/ws_override/bin /opt/asu_fr3/bin" \
+      stack bash -c "$FIND_AND_RUN" _ "$([ "$cmd" = cmp ] && echo cmp.sh || echo cmp_all.sh)" "$@";;
+  urdf)
+    # one-off container (own project name, no stack needed); your ./models override the baked ones
+    docker compose -p asu-fr3-tools run --rm --no-deps -T stack python3 -m asu_fr3_bringup.export_urdf "$@"
+    ;;
+  ctl)
+    mode=mujoco
+    case "${1:-}" in mujoco|isaac|real) mode="$1"; shift;; esac
+    verb="${1:-list_controllers}"; [ $# -gt 0 ] && shift
+    dc "$mode" exec -T stack /usr/local/bin/asu-fr3-entrypoint ros2 control "$verb" "$@"
+    ;;
+  ""|-h|--help|help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//';;
+  *) die "unknown command '$cmd' (try ./fr3 --help)";;
+esac

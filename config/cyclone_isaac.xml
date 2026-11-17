@@ -1,0 +1,22 @@
+<!-- CycloneDDS settings for `isaac` mode: Isaac Sim and this stack on the SAME machine, talking over the loopback interface.
+     Multicast is off (lo has none, and cloud networks usually drop it), so discovery is by unicast to localhost:
+     every process takes the next free participant index and looks for the others on the first 30 indexes.
+     This is the file that made the apt CycloneDDS CLI and Isaac Sim's bundled CycloneDDS find each other (2026-11-15).
+     Use it on the Isaac side too:  export CYCLONEDDS_URI=file:///path/to/cyclone_isaac.xml -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="${ROS_NETWORK_INTERFACE}" />
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>30</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer address="localhost"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

@@ -1,0 +1,70 @@
+# ASU-FR3: one service. The mode (mujoco | isaac | real) decides what runs inside.
+# Use ./fr3 instead of calling this directly: it sets MODE, the ROS domain and the X11 access.
+#
+# The image is not built here: pull it, or build it with ./fr3 build (docker build --target final).
+# Mounts: your ./config, ./models, ./scripts, ./tools and ./bin folders appear inside at /ws_override and win, file by file, over
+# the defaults baked into the image (/opt/asu_fr3); ./data is the read-write folder for logs and your files. The folders may be empty or missing
+# (./fr3 creates them): the image then runs entirely from its baked defaults, so compose.yaml and ./fr3 alone are enough.
+# Privileged mode, /dev and the realtime ulimits are the settings the demo stack used; they are kept
+# until the real-arm tests are done (M7) and trimmed in M8.
+services:
+  stack:
+    image: ${ASU_FR3_IMAGE:-asu-fr3:0.1.0-dev}
+    network_mode: host
+    ipc: host
+    pid: host
+    privileged: true
+    tty: true
+    stdin_open: true
+    command: >
+      ros2 launch asu_fr3_bringup stack.launch.py
+      mode:=${MODE:-mujoco} use_rviz:=${RVIZ:-false} robot_ip:=${ROBOT_IP:-172.16.0.2}
+    volumes:
+      - ${HOME}/.Xauthority:/home/ros/.Xauthority
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev:/dev
+      - ./config:/ws_override/config:ro
+      - ./models:/ws_override/models:ro
+      - ./scripts:/ws_override/scripts:ro
+      - ./tools:/ws_override/tools:ro
+      - ./bin:/ws_override/bin:ro
+      - ./data:/home/ros/data
+    device_cgroup_rules:
+      - 'c 81:* rmw'
+      - 'c 189:* rmw'
+    devices:
+      - "/dev/input:/dev/input"
+    cap_add:
+      - SYS_NICE
+    environment:
+      QT_X11_NO_MITSHM: 1
+      DISPLAY: ${DISPLAY:-}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-100}
+      RCUTILS_COLORIZED_OUTPUT: 1
+      SHELL: /bin/bash
+      RMW: ${RMW:-cyclone}
+      ROS_NETWORK_INTERFACE: ${ROS_NETWORK_INTERFACE:-lo}
+      CYCLONE_CONFIG: ${CYCLONE_CONFIG:-cyclone_config.xml}
+      FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+      FR3_SCENE: ${FR3_SCENE:-}
+      CONTROLLERS_FILE: ${CONTROLLERS_FILE:-}
+      RVIZ_CONFIG: ${RVIZ_CONFIG:-asu_fr3.rviz}
+      FR3_LOG_DIR: /home/ros/data/logs
+      FR3_DATA_DIR: /home/ros/data
+      ISAAC_JOINT_STATES_TOPIC: ${ISAAC_JOINT_STATES_TOPIC:-/isaac_joint_states}
+      ISAAC_JOINT_COMMANDS_TOPIC: ${ISAAC_JOINT_COMMANDS_TOPIC:-/isaac_joint_commands}
+      ISAAC_SUM_WRAPPED_JOINT_STATES: ${ISAAC_SUM_WRAPPED_JOINT_STATES:-false}
+      ISAAC_EFFORT_INITIAL_VALUE: ${ISAAC_EFFORT_INITIAL_VALUE:-0.0}
+      ISAAC_COMMAND_THRESHOLD: ${ISAAC_COMMAND_THRESHOLD:-}
+      BRIDGE_PHYSICS_HZ: ${BRIDGE_PHYSICS_HZ:-1000}
+      BRIDGE_REALTIME_FACTOR: ${BRIDGE_REALTIME_FACTOR:-1.0}
+    ulimits:
+      rtprio: 99
+      rttime: -1
+      memlock: 8428281856
+
+  # Stand-in for Isaac Sim: MuJoCo behind the same topics (./fr3 up isaac --standin). Same image, second container.
+  standin:
+    extends: stack
+    profiles: ["standin"]
+    command: ros2 run asu_fr3_bringup mujoco_isaac_bridge

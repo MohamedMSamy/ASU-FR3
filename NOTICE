@@ -1,0 +1,42 @@
+ASU-FR3
+Copyright (c) 2026 the ASU-FR3 authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This project builds on and includes code from:
+
+- crisp_controllers_demos  (MIT)  Copyright (c) 2026 Learning Systems and Robotics Lab,
+  Technical University of Munich. https://github.com/utiasDSL/crisp_controllers_demos
+  Copied into packages/ (crisp_mujoco_sim; crisp_controllers_robot_demos, renamed asu_fr3_bringup), then modified.
+- crisp_controllers, crisp_py, crisp_gym  (MIT)  Copyright (c) 2026 Learning Systems and Robotics Lab,
+  Technical University of Munich. https://github.com/utiasDSL/crisp_controllers
+- franka_ros2, libfranka, franka_description  (Apache-2.0)  Franka Robotics GmbH.
+  packages/asu_fr3_bringup/launch/stack.launch.py (derived from the Franka demo launch) keeps its Franka Robotics header.
+- MuJoCo  (Apache-2.0)  Google DeepMind. Downloaded at build time, checksum-pinned.
+- joint_state_topic_hardware_interface  (Apache-2.0)  ros-controls.
+- ros_tcp_endpoint  (Apache-2.0)  Unity Technologies. https://github.com/Unity-Technologies/ROS-TCP-Endpoint (tag ROS2v0.7.0). Built into the image from source.
+- quest2ros  (MIT, confirmed by the project owner)  https://github.com/Quest2ROS/quest2ros. Built into the image from source (messages OVR2ROSInputs and OVR2ROSHapticFeedback).
+- tools/ and bin/ (vr_teleop*.py, vr_gripper.py, vr_target_viz.py, rec_introspection.py, box_from_points.py, ksweep_summary.py, vr_up.sh, setk.sh, rec.sh, cmp.sh, cmp_all.sh) and scripts/: written for the ASU lab (crisp_lab), Apache-2.0 with this project.
+- rt-tests (cyclictest, GPL-2.0)  installed from the Ubuntu archive with apt; not part of this repository.
+
+The MIT license text for the TUM LSY code:
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+  and associated documentation files (the "Software"), to deal in the Software without restriction,
+  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+  sublicense, and/or sell copies of the Software, subject to the above copyright notice and this
+  permission notice being included in all copies or substantial portions of the Software.
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+- MuJoCo Menagerie franka_fr3 (Apache-2.0)  Franka Robotics / Google DeepMind. The MJCF model
+  models/fr3_fric_v1.xml (derived from Menagerie's fr3.xml; the original is in archive/models_old_variants/) and the meshes in models/assets come from Menagerie
+  (per the CRISP docs), modified by the CRISP authors (torque actuators, joint friction) and
+  later by this project (friction/damping/armature).
+
+The Menagerie license file (Apache-2.0 plus a Willow Garage BSD section, copied verbatim from
+https://github.com/google-deepmind/mujoco_menagerie/blob/main/franka_fr3/LICENSE) is shipped next to the model:
+models/LICENSE.
+
+The six whole-link visual meshes link0.obj and link3.obj to link7.obj were removed from models/assets (unused duplicates of the split pieces).
+models/fr3_fric_v1.xml includes the Franka Hand using mass, inertia and geometry from franka_description (Apache-2.0).
+
+models/assets holds only mesh files (35 .obj and 9 .stl) from the same Menagerie franka_fr3 folder; they are covered by models/LICENSE.

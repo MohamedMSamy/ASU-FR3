@@ -1,0 +1,17 @@
+data/
+archive/
+dist/
+**/__pycache__/
+*.egg-info/
+build/
+install/
+log/
+.env
+.obsidian/
+.claude/
+.vscode/
+.idea/
+*.pyc
+.DS_Store
+*.tmp
+*.swp

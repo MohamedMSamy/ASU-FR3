@@ -1,0 +1,8 @@
+# x, y, z, [yaw_deg], [settle_s]     metres in the BASE frame, hand pointing down
+# Edit this file or copy it (cp waypoints_example.csv my_points.csv) and pass --file my_points.csv
+# Lines starting with '#' and blank lines are ignored.
+0.40,  0.00, 0.45
+0.45,  0.00, 0.45
+0.45,  0.20, 0.45
+0.45, -0.20, 0.45
+0.40,  0.00, 0.45
