@@ -644,10 +644,12 @@ Which folders your edits reach without a rebuild: `config/`, `models/`, `scripts
 | What | Command |
 |---|---|
 | Whole session: everything typed and printed, in one file | `script -q -f data/logs/terminal_$(date +%Y%m%d_%H%M%S).txt` — everything after this is recorded; type `exit` to stop |
-| The stack's own log (it is gone after `./fr3 down`) | `./fr3 up real 2>&1 \| tee data/logs/stack_real_$(date +%Y%m%d_%H%M%S).log` |
-| A running stack's log, from now on | `./fr3 logs real 2>&1 \| tee data/logs/stack_real_$(date +%Y%m%d_%H%M%S).log` |
+| The stack's own log (it is gone after `./fr3 down`) | `ROBOT_IP=<ip> ./fr3 up real 2>&1 \| tee -i data/logs/stack_real_$(date +%Y%m%d_%H%M%S).log` |
+| A running stack's log, from now on | `./fr3 logs real 2>&1 \| tee -i data/logs/stack_real_$(date +%Y%m%d_%H%M%S).log` |
 | Catch the moment of a communication error live | `./fr3 logs real \| grep --line-buffered -iE "communication\|overrun\|reflex"` |
 | Take the colour codes out of a saved file | `sed 's/\x1b\[[0-9;]*m//g' data/logs/stack_real_<time>.log > clean.log` |
+
+Use `tee -i`, not plain `tee`: Ctrl+C goes to the whole pipe, and without `-i` `tee` can quit before the stack's last lines (the shutdown messages, often the interesting ones) are written. The file fills as the stack runs; follow it from another terminal with `tail -f <file>`. This file holds only the stack's output; what a script prints in another terminal goes into the `script` file, or add `2>&1 \| tee -i data/logs/run_01.txt` to that run.
 
 Start `script` first when you sit down (one terminal for the whole lab day), start the stack with `tee` in the next terminal, and run `./fr3 rec` for the data. Name the files with the date: nobody remembers which run is which a week later. All of these go into `data/logs/`, which is never shared.
 
