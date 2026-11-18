@@ -18,8 +18,8 @@ What it shows (refreshed 5 times a second)
     reads from the controller. Approximate: the controller works in the tool frame and clips the error (0.1 m / 0.5 rad)
   * target_wrench: the extra force somebody publishes to the controller (usually zero)
   * per joint: position, velocity, MEASURED torque (the effort of /franka/joint_states; on the real arm the Franka torque sensor,
-    which includes what the robot itself does for gravity), the controller's TASK torque tau_task (the J^T * force part, only if the controller
-    has enable_introspection: true, e.g. archive/config_old_variants/controllers_simref.yaml; tau_desired is not used: CRISP never writes it), and the external torque / wrench if the franka broadcasters run
+    which includes what the robot itself does for gravity), the COMMANDED torque tau_cmd (what the controller sent to the hardware: the command interface
+    of the introspection stream, same value as ./fr3 rec and --log write; the stream is on without any setting), and the external torque / wrench if the franka broadcasters run
     (they are not configured in our stack, so those lines say "not available")
   * warnings: torque above 80 % of the nominal limit, velocity above 80 %, no or several target publishers, stale joint states
 
@@ -233,7 +233,7 @@ def frame(mon):
 
     add("")
     add("JOINTS", "head")
-    add(f"  {'joint':<5}{'q [deg]':>10}{'dq [rad/s]':>12}{'tau [N m]':>11}  {'torque / limit':<22}{'task tau':>10}{'ext tau':>10}", "head")
+    add(f"  {'joint':<5}{'q [deg]':>10}{'dq [rad/s]':>12}{'tau [N m]':>11}  {'torque / limit':<22}{'cmd tau':>10}{'ext tau':>10}", "head")
     if q is None or tau is None:
         add("  no joint states", "warn")
     else:
@@ -243,7 +243,7 @@ def frame(mon):
             lv = "bad" if (ratio > 1.0 or vr > 1.0) else ("warn" if (ratio > 0.8 or vr > 0.8) else "")
             if lv:
                 warn.append((f"{name}: torque {ratio * 100:.0f} % / velocity {vr * 100:.0f} % of nominal limit", lv))
-            task = next((v for k, v in intro.items() if k.endswith(f"tau_task_{i}")), None)
+            task = intro.get(f"command_interface.{JOINTS[i]}/effort")        # commanded torque (the stream's own name, see lab_columns.py)
             task = f"{task:+.2f}" if task is not None else "n/a"
             ext = f"{te.effort[i]:+.2f}" if te is not None and len(te.effort) > i else "n/a"
             add(f"  {'j' + str(i + 1):<5}{np.degrees(q[i]):>+10.2f}{dq[i]:>+12.3f}{tau[i]:>+11.2f}  "

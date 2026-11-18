@@ -72,7 +72,7 @@ def main():
         kmax = (vmax.get("translational", 900.0), vmax.get("rotational", 60.0))
         print(f"      cartesian_impedance_controller: k_pos {kp} N/m, k_rot {kr} N m/rad   (stiffness is clamped at {kmax[0]:g} / {kmax[1]:g})")
         print(f"      enable_overrun {overrun}   use_operational_space {osc}   use_friction {fric}   use_gravity_compensation {grav}")
-        print(f"      introspection {cart.get('enable_introspection', False)} (needed by ./fr3 rec for the commanded torque and missed cycles)")
+        print(f"      introspection {cart.get('enable_introspection', False)} (optional: adds the cartesian_impedance_controller.* columns to ./fr3 rec; commanded and reported torque and missed cycles are recorded without it)")
         if overrun is not False:
             warn.append("enable_overrun is not false: on the real arm libfranka already paces the loop at 1 kHz; with true two clocks beat (use controllers_real.yaml)")
         if grav:
