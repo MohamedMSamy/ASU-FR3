@@ -18,6 +18,7 @@ repeated for one second, so switching to the Cartesian controller afterwards (by
 To set any other target without moving: 15_set_target.py.
 """
 import argparse
+import time
 
 import numpy as np
 
@@ -46,8 +47,17 @@ def main() -> None:
             return
         # Not r.home(): it reads the controller list, which is garbled across ROS distros (see 00_status.py).
         L.ensure_controller(r, "joint_trajectory_controller")
-        r.joint_trajectory_controller_client.send_joint_config(
-            list(C.JOINT_NAMES), [float(x) for x in C.READY_Q], T, blocking=True)
+        try:
+            r.joint_trajectory_controller_client.send_joint_config(
+                list(C.JOINT_NAMES), [float(x) for x in C.READY_Q], T, blocking=True)
+        except KeyboardInterrupt:
+            # The trajectory goal lives in the controller: without this the arm would carry on to home after the script is gone.
+            # A new goal to where the arm is NOW replaces it.
+            print("\n[lab] interrupted: stopping the trajectory here.")
+            r.joint_trajectory_controller_client.send_joint_config(
+                list(C.JOINT_NAMES), [float(x) for x in r.joint_values], 1.0, blocking=False)
+            time.sleep(1.2)
+            raise
         L.hold(r)
         pose = r.end_effector_pose
         if a.no_settle:

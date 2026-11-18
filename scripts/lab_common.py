@@ -16,6 +16,7 @@ import csv
 import datetime
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -95,8 +96,15 @@ def connect(timeout: float = 10.0):
         from lab_fake import FakeRobot
         print("[lab] FAKE robot (CRISP_LAB_FAKE=1): no ROS, no sim.")
         return FakeRobot()
+    import rclpy
     from crisp_py.robot import Robot
     from crisp_py.robot.robot_config import FrankaConfig
+    from rclpy.signals import SignalHandlerOptions
+
+    if not rclpy.ok():
+        # Ctrl+C must raise KeyboardInterrupt and leave ROS running. With rclpy's default handler it shuts ROS down at once and the
+        # hold target of session() below is never published (measured: the controller kept the last streamed target).
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
 
     cfg = FrankaConfig(
         joint_names=C.JOINT_NAMES,
@@ -299,14 +307,15 @@ def ramp_to(r, goal: Pose, lin_speed: float | None = None, ang_speed: float | No
 class Logger:
     """Samples the robot at C.LOG_HZ in a background thread and writes a CSV on stop()."""
 
-    COLS = (["t", "tag"]
+    COLS = (["t", "tag", "stamp"]
             + [f"pos_{a}" for a in "xyz"] + [f"quat_{a}" for a in "xyzw"]
             + [f"tgt_pos_{a}" for a in "xyz"] + [f"tgt_quat_{a}" for a in "xyzw"]
             + ["pos_err_mm", "ang_err_deg", "down_angle_deg"]
             + ["err_x_mm", "err_y_mm", "err_z_mm", "err_rx_deg", "err_ry_deg", "err_rz_deg"]
             + ["f_x_N", "f_y_N", "f_z_N", "m_x_Nm", "m_y_Nm", "m_z_Nm"]
             + [f"q{i}" for i in range(1, 8)] + [f"dq{i}" for i in range(1, 8)]
-            + [f"tau{i}" for i in range(1, 8)])
+            + [f"tau_meas{i}" for i in range(1, 8)])
+    # Besides COLS the file gets every column `./fr3 rec` records (tau_cmdN, cmd_limitedN, cycles_/missed_<controller>, ...): same names, see lab_columns.py
 
     def __init__(self, r, name: str, script: str = "", extra_meta: dict | None = None):
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -314,6 +323,16 @@ class Logger:
         self.base = C.LOG_DIR / f"{name}_{C.MODE}_{stamp}"
         self.r = r
         self.rows: list[list] = []
+        self.extra: list[dict] = []          # per row: the introspection columns (same names as ./fr3 rec)
+        self.tap = None
+        self.vr = None
+        if not FAKE:
+            try:
+                from lab_columns import IntrospectionTap, PoseTap
+                self.tap = IntrospectionTap(r.node)
+                self.vr = PoseTap(r.node, names=("vr",))      # raw headset hand pose and buttons; the columns appear only if a headset sent data
+            except Exception as exc:  # noqa: BLE001
+                print(f"[lab] no introspection columns in the log: {exc}")
         self.tag = ""
         self._stop = threading.Event()
         self._t0 = time.perf_counter()
@@ -353,6 +372,11 @@ class Logger:
         except Exception:  # noqa: BLE001
             return None
         tau = getattr(r, "_lab_effort", np.full(7, np.nan))
+        stamp, self._snap = self.tap.snapshot() if self.tap is not None else (None, {})
+        if self.vr is not None:
+            self._snap = {**self._snap, **dict(zip(self.vr.columns, self.vr.snapshot()))}
+        if all(f"{k}{i}" in self._snap for k in ("q", "dq", "tau_meas") for i in range(1, 8)):    # the very sample ./fr3 rec writes
+            q, dq, tau = ([self._snap[f"{k}{i}"] for i in range(1, 8)] for k in ("q", "dq", "tau_meas"))
         pos_err = float(np.linalg.norm(cur.position - tgt.position) * 1000.0)
         ang_err = orientation_error_deg(cur.orientation, tgt.orientation)
         dp, dr = error_axes(cur.position, cur.orientation, tgt.position, tgt.orientation)
@@ -362,7 +386,7 @@ class Logger:
             fm = [float("nan")] * 6
         else:
             fm = list(self._k[0] * dp / 1000.0) + list(self._k[1] * np.radians(dr))
-        return ([time.perf_counter() - self._t0, self.tag]
+        return ([time.perf_counter() - self._t0, self.tag, round(stamp, 6) if stamp is not None else round(time.time(), 6)]
                 + list(cur.position) + list(cur.orientation.as_quat())
                 + list(tgt.position) + list(tgt.orientation.as_quat())
                 + [pos_err, ang_err, down_angle_deg(cur.orientation)]
@@ -377,6 +401,7 @@ class Logger:
             row = self._sample()
             if row is not None:
                 self.rows.append(row)
+                self.extra.append(self._snap)
             k += 1
             _sleep_until(t0 + k * period)
 
@@ -384,10 +409,19 @@ class Logger:
         self._stop.set()
         self._thread.join(timeout=2.0)
         csv_path = f"{self.base}.csv"
+        have = set(self.COLS)         # q, dq and tau_meas come from the joint states already; the rest from the introspection stream
+        vr_live = {k for d in self.extra for k, v in d.items() if k.startswith("vr_") and v == v}      # vr_* only if a headset sent data
+        extra_cols = []
+        for d in self.extra:
+            for k in d:
+                if k not in have and (not k.startswith("vr_") or k in vr_live):
+                    have.add(k)
+                    extra_cols.append(k)
         with open(csv_path, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(self.COLS)
-            w.writerows(self.rows)
+            w.writerow(self.COLS + extra_cols)
+            for row, d in zip(self.rows, self.extra):
+                w.writerow(row + [d.get(k, float("nan")) for k in extra_cols])
         with open(f"{self.base}.json", "w") as f:
             json.dump(self.meta, f, indent=2, default=str)
         return csv_path
@@ -426,10 +460,16 @@ def confirm_real(args) -> None:
 
 @contextmanager
 def session(args, script: str, controller: str | None = C.CARTESIAN_CONTROLLER):
-    """connect + confirm + switch controller + logger; always hold the pose on exit."""
+    """connect + confirm + switch controller + logger.
+
+    Normal end: the target is left exactly as the script commanded it (nothing changes, nothing can jump).
+    Ctrl+C or an error: the target is set to where the arm is NOW and published for 0.3 s, so the arm stops and holds there.
+    A second Ctrl+C during this cleanup is ignored.
+    """
     confirm_real(args)
     r = connect()
     lg = None
+    stop_here = False
     try:
         if controller and not getattr(args, "no_switch", False):
             ensure_controller(r, controller)
@@ -437,9 +477,17 @@ def session(args, script: str, controller: str | None = C.CARTESIAN_CONTROLLER):
             lg = Logger(r, args.log, script=script)
         yield r, lg
     except KeyboardInterrupt:
+        stop_here = True
         print("\n[lab] interrupted: holding current pose.")
+    except BaseException:
+        stop_here = True
+        raise
     finally:
-        hold(r)
+        old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        if stop_here:
+            hold(r)
+            time.sleep(0.3)           # about 15 messages at 50 Hz: the controller now holds HERE
         if lg:
             print(f"[lab] log written: {lg.stop()}")
         r.shutdown()
+        signal.signal(signal.SIGINT, old_sigint)

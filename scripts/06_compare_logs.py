@@ -98,7 +98,7 @@ def compare_traj(paths, tag, png):
         ("orientation error RMS [deg]", lambda c: rms(c["ang_err_deg"])),
         ("orientation error max [deg]", lambda c: np.nanmax(c["ang_err_deg"])),
         ("hand angle from down, mean [deg]", lambda c: np.nanmean(c["down_angle_deg"])),
-    ] + [(f"|torque| mean joint {i} [Nm]", (lambda i: lambda c: np.nanmean(np.abs(c[f"tau{i}"])))(i))
+    ] + [(f"|torque| mean joint {i} [Nm]", (lambda i: lambda c: np.nanmean(np.abs(c[f"tau_meas{i}"] if f"tau_meas{i}" in c else c[f"tau{i}"])))(i))
          for i in range(1, 8)]
     for nice, fn in rows:
         vals = []
