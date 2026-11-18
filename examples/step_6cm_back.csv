@@ -1,0 +1,4 @@
+# x, y, z, yaw_deg   6 cm step along -x (the other direction of step_6cm.csv): goes to x 0.46 first, then steps back to 0.40 and returns (02_waypoints.py --lin-speed 0.1)
+0.46, 0.00, 0.45, 0.0
+0.40, 0.00, 0.45, 0.0
+0.46, 0.00, 0.45, 0.0

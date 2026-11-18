@@ -44,15 +44,15 @@ Running the CRISP controllers used to mean several repositories, a pixi environm
 
 ## What is in this folder
 
-| Folder | Contents |
-|---|---|
-| `scripts/` | the numbered scripts and their helper modules |
-| `tools/` | the live monitor and the VR tools |
-| `bin/` | the helpers behind the `./fr3` commands |
-| `config/` | controller gains files, DDS files, RViz profiles, safety limits (`lab_config.py`) |
-| `models/` | MuJoCo models and scenes, URDF, meshes |
-| `packages/` | the ROS 2 packages (launch files, simulator plugin) |
-| `examples/` | sample waypoint files |
+| Folder      | Contents                                                                          |
+| ----------- | --------------------------------------------------------------------------------- |
+| `scripts/`  | the numbered scripts and their helper modules                                     |
+| `tools/`    | the live monitor and the VR tools                                                 |
+| `bin/`      | the helpers behind the `./fr3` commands                                           |
+| `config/`   | controller gains files, DDS files, RViz profiles, safety limits (`lab_config.py`) |
+| `models/`   | MuJoCo models and scenes, URDF, meshes                                            |
+| `packages/` | the ROS 2 packages (launch files, simulator plugin)                               |
+| `examples/` | sample waypoint files                                                             |
 
 ## Built on
 
